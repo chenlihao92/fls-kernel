@@ -349,6 +349,8 @@ static inline void smp_prepare_cpus(unsigned int maxcpus) { }
  */
 static void __init setup_command_line(char *command_line)
 {
+    //把刚才在setup_arch()中拷贝进来的command_line，拷贝到全局变量saved_command_line和static_command_line所指向的内存单元中。
+    //    //通过memblock分配内存空间，参考memblock文档
 	saved_command_line =
 		memblock_virt_alloc(strlen(boot_command_line) + 1, 0);
 	initcall_command_line =
@@ -475,122 +477,132 @@ static void __init mm_init(void)
 	pgtable_init();
 	vmalloc_init();
 }
-
+//start kernel初始化
 asmlinkage void __init start_kernel(void)
 {
 	char * command_line;
+    //地址指针，指向内核启动参数在内存中的位置（虚拟地址）
 	extern const struct kernel_param __start___param[], __stop___param[];
 
 	/*
 	 * Need to run as early as possible, to initialize the
 	 * lockdep hash:
 	 */
-	lockdep_init();
-	smp_setup_processor_id();
-	debug_objects_early_init();
+
+	lockdep_init();//对记录各锁之间依赖关系的结构体进行初始化？？？！！！
+	smp_setup_processor_id();//指定当前的cpu的逻辑号，这个函数对应于对称多处理器的设置，当系统中只有一个cpu的情况，此函数为空
+	debug_objects_early_init();//用于内核的对象调试。依赖配置CONFIG_DEBUG_OBJECTS
 
 	/*
 	 * Set up the the initial canary ASAP:
 	 */
-	boot_init_stack_canary();
+	boot_init_stack_canary();//初始化防止栈溢出攻击保护的堆栈。
 
-	cgroup_init_early();
+	cgroup_init_early();    //一组进程的行为控制，数据结构和其中链表的初始化
 
-	local_irq_disable();
-	early_boot_irqs_disabled = true;
+	local_irq_disable();    //关闭本地中断，因为尚未对中断代码和向量表、中断处理器进行初始化，所以必须关中断
+	early_boot_irqs_disabled = true;//用来协助调试，执行当前初始启动代码时，对无效的中断激活事件输出警告
 
 /*
  * Interrupts are still disabled. Do necessary setups, then
  * enable them
  */
-	boot_cpu_init();
-	page_address_init();
-	pr_notice("%s", linux_banner);
-	setup_arch(&command_line);
-	mm_init_owner(&init_mm, &init_task);
-	mm_init_cpumask(&init_mm);
-	setup_command_line(command_line);
-	setup_nr_cpu_ids();
-	setup_per_cpu_areas();
-	smp_prepare_boot_cpu();	/* arch-specific boot-cpu hooks */
-
+	boot_cpu_init();        //激活当前CPU
+	page_address_init();    //如果有高端内存，则初始化高端内存page_address_htable数组
+	pr_notice("%s", linux_banner);  
+	setup_arch(&command_line);  //架构初始化相关
+	mm_init_owner(&init_mm, &init_task);    //初始化init_mm结构体,owner指向init_task,即init_mm->owner = init_task;
+	mm_init_cpumask(&init_mm);              //设置init_mm的cpu_mask
+	setup_command_line(command_line);       //对command_line进行备份与保存
+	setup_nr_cpu_ids();                     //设置nr_cpu_ids变量，即cpu id最大值
+    //用于为每个cpu的per-cpu变量副本分配空间，注意这时alloc内存分配器还没建立起来，通过memblock为初始化期间的这些变量副本分配物理空间。
+	setup_per_cpu_areas();                  
+	smp_prepare_boot_cpu();	/* arch-specific boot-cpu hooks *///设置arm的TPIDRPRW寄存器
+    //因为前边在setup_arch中已将节点描述符、管理区描述符和页描述符做了初始化，这里进一步的建立系统内存页区(zone)链表
 	build_all_zonelists(NULL, NULL);
+    //会调用hotcpu_notifier函数。在编译选项CONFIG_HOTPLUG_CPU起作用时，这个函数才有效。这个编译选项就热插拔技术，而且是CPU的热插拔
 	page_alloc_init();
 
 	pr_notice("Kernel command line: %s\n", boot_command_line);
-	parse_early_param();
+	parse_early_param();                    //再次处理early_param定义的参数，在setup_arch调用过一次，可参考
+    //解析Booting kernel传进来的参数
 	parse_args("Booting kernel", static_command_line, __start___param,
 		   __stop___param - __start___param,
 		   -1, -1, &unknown_bootoption);
 
-	jump_label_init();
+	jump_label_init(); //处理静态定义的jump label，执行跳转指令或是nop指令
 
 	/*
 	 * These use large bootmem allocations and must precede
 	 * kmem_cache_init()
 	 */
-	setup_log_buf(0);
-	pidhash_init();
-	vfs_caches_init_early();
-	sort_main_extable();
-	trap_init();
-	mm_init();
+	setup_log_buf(0);                       //使用memblock分配一个启动信息的缓冲区
+	pidhash_init();                         //使用bootmem分配并初始化PID散列表
+	//虚拟文件系统的早期初始化有函数vfs_caches_init_early()实现，主要负责dentry和inode的hashtable的初始化工作。
+    vfs_caches_init_early();                
+	sort_main_extable();                    //对内核异常表进行排序
+	trap_init();                            //对内核陷阱异常经行初始化，ARM架构中位空函数
+    //初始化内核内存分配器，过度到伙伴系统，启动slab机制，初始化非连续内存区
+    //以后分配内存不能使用memblock来分配了
+	mm_init();                              
 
 	/*
 	 * Set up the scheduler prior starting any interrupts (such as the
 	 * timer interrupt). Full topology setup happens at smp_init()
 	 * time - but meanwhile we still have a functioning scheduler.
 	 */
-	sched_init();
+	sched_init();   //初始化调度器数据结构并创建运行队列？？？
 	/*
 	 * Disable preemption - early bootup scheduling is extremely
 	 * fragile until we cpu_idle() for the first time.
 	 */
+    //禁止内核抢占，关中断
 	preempt_disable();
 	if (WARN(!irqs_disabled(), "Interrupts were enabled *very* early, fixing it\n"))
 		local_irq_disable();
-	idr_init_cache();
-	rcu_init();
-	tick_nohz_init();
-	context_tracking_init();
-	radix_tree_init();
+	idr_init_cache();           //创建idr layer的高速缓存cache，参考idr机制文档
+	rcu_init();                 //初始化系统中"读-写-拷贝"同步机制？？？
+	tick_nohz_init();           //cpu处在idle状态时关闭tick中断的优化初始化
+	context_tracking_init();    //没有设置CONFIG_CONTEXT_TRACKING_FORCE宏，不会调用该函数
+	radix_tree_init();          //radix树的初始化，供页面查找
 	/* init some links before init_ISA_irqs() */
-	early_irq_init();
-	init_IRQ();
-	tick_init();
-	init_timers();
-	hrtimers_init();
-	softirq_init();
-	timekeeping_init();
-	time_init();
-	sched_clock_postinit();
-	perf_event_init();
-	profile_init();
-	call_function_init();
+	early_irq_init();           //中断初始化，初始化irq_desc数组
+	init_IRQ();                 //中断初始化，调用特定平台的中断初始化的init_irq()函数，参考early_irq_init.c
+	tick_init();                //时钟滴答的初始化，见timer_init.c
+	init_timers();              //初始化本CPU上的软件时钟相关的数据结构，注册时钟软中断TIMER_SOFTIRQ,见timer_init.c
+	hrtimers_init();            //高分辨率定时器框架初始化,见timer_init.c
+	softirq_init();             //软中断初始化,参考软中断文档
+	timekeeping_init();         //初始化需要和时钟代码共同管理的时间相关值
+	time_init();                //调用平台设置的time初始化函数
+	sched_clock_postinit();     //进程调度时钟初始化
+    //CPU性能监视机制初始化，此机制包括CPU同一时间执行指令数，cache??miss数，分支预测失败次数等性能参数？？？
+	perf_event_init();          
+	profile_init();             //对内核的profile（一个内核性能调式工具）功能进行初始化，分配好存放profile信息的内存
+	call_function_init();       //smp下跨cpu的函数传递初始化，参考smp文档
 	WARN(!irqs_disabled(), "Interrupts were enabled early\n");
 	early_boot_irqs_disabled = false;
-	local_irq_enable();
+	local_irq_enable();         //使能本地中断
 
-	kmem_cache_init_late();
+	kmem_cache_init_late();     //slab分配器后期初始化 
 
 	/*
 	 * HACK ALERT! This is early. We're enabling the console before
 	 * we've done PCI setups etc, and console_init() must be aware of
 	 * this. But we do want output early, in case something goes wrong.
 	 */
-	console_init();
+	console_init();             //初始化控制台，参考console驱动文档
 	if (panic_later)
 		panic("Too many boot %s vars at `%s'", panic_later,
 		      panic_param);
 
-	lockdep_info();
+	lockdep_info();             //打印lockdep调试模块信息
 
 	/*
 	 * Need to run this when irqs are enabled, because it wants
 	 * to self-test [hard/soft]-irqs on/off lock inversion bugs
 	 * too:
 	 */
-	locking_selftest();
+	locking_selftest();         //锁测试
 
 #ifdef CONFIG_BLK_DEV_INITRD
 	if (initrd_start && !initrd_below_start_ok &&
@@ -601,18 +613,18 @@ asmlinkage void __init start_kernel(void)
 		initrd_start = 0;
 	}
 #endif
-	page_cgroup_init();
-	debug_objects_mem_init();
-	kmemleak_init();
-	setup_per_cpu_pageset();
-	numa_policy_init();
-	if (late_time_init)
+	page_cgroup_init();         //容器组的页面内存分配
+	debug_objects_mem_init();   //调试相关,参考debug_objects_early_init文档
+	kmemleak_init();            //内存泄露检测机制的初始化
+	setup_per_cpu_pageset();    //为zone中用于实现单一页框的特殊高速缓存设置单一页面数量
+	numa_policy_init();         //一致性内存访问(NUMA)初始化，设置NUMA系统中的内存策略。arm非NUMA系统，不考虑
+	if (late_time_init)         //arm中为NULL,不掉用
 		late_time_init();
-	sched_clock_init();
-	calibrate_delay();
-	pidmap_init();
-	anon_vma_init();
-	acpi_early_init();
+	sched_clock_init();         //初始化调度时钟
+	calibrate_delay();          //用于BogoMIPS,该值显示1jiffy内消耗多少cpu
+	pidmap_init();              //进程PID位图分配映射初始化
+	anon_vma_init();            //创建anon_vma的slab缓存
+	acpi_early_init();          
 #ifdef CONFIG_X86
 	if (efi_enabled(EFI_RUNTIME_SERVICES))
 		efi_enter_virtual_mode();
@@ -621,29 +633,30 @@ asmlinkage void __init start_kernel(void)
 	/* Should be run before the first non-init thread is created */
 	init_espfix_bsp();
 #endif
-	thread_info_cache_init();
-	cred_init();
-	fork_init(totalram_pages);
-	proc_caches_init();
-	buffer_init();
-	key_init();
-	security_init();
-	dbg_late_init();
-	vfs_caches_init(totalram_pages);
-	signals_init();
+	thread_info_cache_init();   //创建进程thread_info的slab高速缓存
+	cred_init();                //为对象的每个用户赋予资格
+	fork_init(totalram_pages);  //进程创建机制初始化
+	proc_caches_init();         //创建进程所需的各结构体slab缓存
+	buffer_init();              //为buffer_head结构体创建slab高速缓存
+	key_init();                 //准备密钥
+	security_init();            //内核安全框架初始化
+	dbg_late_init();            //内核调试系统后期初始化，kgdb初始化
+	vfs_caches_init(totalram_pages);    //初始化VFS中使用的多种缓存
+	signals_init();             //创建sigqueue结构高速缓存
 	/* rootfs populating might need page-writeback */
-	page_writeback_init();
+	page_writeback_init();      //页回写机制初始化
 #ifdef CONFIG_PROC_FS
-	proc_root_init();
+	proc_root_init();           //注册并初始化proc文件系统
 #endif
-	cgroup_init();
-	cpuset_init();
-	taskstats_init_early();
-	delayacct_init();
+	cgroup_init();               //注册未能初始化的cgroup子系统
+	cpuset_init();              //注册cpuset文件系统
+	taskstats_init_early();     //初始化任务统计信息接口
+	delayacct_init();           //为管理延迟信息做准备
 
-	check_bugs();
+	check_bugs();               //检查写缓冲一致性
 
-	acpi_subsystem_init();
+	acpi_subsystem_init();      
+     //simple firmware interface 简单的固件接口
 	sfi_init_late();
 
 	if (efi_enabled(EFI_RUNTIME_SERVICES)) {
@@ -651,10 +664,10 @@ asmlinkage void __init start_kernel(void)
 		efi_free_boot_services();
 	}
 
-	ftrace_init();
+	ftrace_init();              //trace初始化 
 
 	/* Do the rest non-__init'ed, we're now alive */
-	rest_init();
+	rest_init();                //剩余的初始化
 }
 
 /* Call all constructor functions linked into the kernel. */
