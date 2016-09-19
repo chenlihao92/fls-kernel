@@ -150,19 +150,20 @@ ENDPROC(lookup_processor_type)
  *	r9 = cpuid (preserved)
  */
 __lookup_processor_type:
-	adr	r3, __lookup_processor_type_data
+	adr	r3, __lookup_processor_type_data  //R3指向类型数据指针
+    //读取R3指向地址三个WORD数据到R4,R5,R6，R4=标号3处的虚拟地址，r5=__arch_info_begin，r6=__arch_info_end。
 	ldmia	r3, {r4 - r6}
-	sub	r3, r3, r4			@ get offset between virt&phys
-	add	r5, r5, r3			@ convert virt addresses to
-	add	r6, r6, r3			@ physical address space
-1:	ldmia	r5, {r3, r4}			@ value, mask
-	and	r4, r4, r9			@ mask wanted bits
-	teq	r3, r4
-	beq	2f
-	add	r5, r5, #PROC_INFO_SZ		@ sizeof(proc_info_list)
-	cmp	r5, r6
-	blo	1b
-	mov	r5, #0				@ unknown processor
+	sub	r3, r3, r4			@ get offset between virt&phys  //物理地址-虚拟地址
+	add	r5, r5, r3			@ convert virt addresses to     //将R5的虚拟地址转换成物理地址，R5为类型数据起始地址
+	add	r6, r6, r3			@ physical address space        //将R6的虚拟地址转换成物理地址，R6为类型数据结束地址
+1:	ldmia	r5, {r3, r4}			@ value, mask           //从R5指向的地址读取两个WORD到R3,R4
+	and	r4, r4, r9			@ mask wanted bits              //获取判断位
+	teq	r3, r4                                              //判断本处理器类型是否已找到
+	beq	2f                                                  //若已找到，跳转到2：执行
+	add	r5, r5, #PROC_INFO_SZ		@ sizeof(proc_info_list)//若未找到，R5指针增到一个类型数据长度sizeof(proc_info_list)
+	cmp	r5, r6                                              //是否已查找完所有处理器类型
+	blo	1b                                                  //未查找完返回1标号处继续循环
+	mov	r5, #0				@ unknown processor             //若未找到本处理器类型信息，返回值R5设置为NULL 
 2:	mov	pc, lr
 ENDPROC(__lookup_processor_type)
 

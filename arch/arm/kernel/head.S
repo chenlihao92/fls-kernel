@@ -77,8 +77,17 @@
 	.arm
 
 	__HEAD
-ENTRY(stext)
- ARM_BE8(setend	be )			@ ensure we are in BE8 mode
+ENTRY(stext)                    // 内核入口点
+ ARM_BE8(setend	be )			@ ensure we are in BE8 mode //设置CPSR中的端标记位，大端存储
+
+/*
+    分析如下宏定义可知，内核在GCC版本大于4.0后，可通过配置宏
+    CONFIG_THUMB2_KERNEL来选择编译成THUMB指令集内核或ARM指令集内核。
+    在编译成ARM指令集内核时，THUMB宏定义的代码行是不可见的。
+    同理编译成THUMB指令集内核时，ARM宏定义的代码行无效。
+    BSYM宏是为在THUMB指令集时访问标号处理而定义的宏。
+    #define BSYM(sym) sym。所以在arm指令集编译时，下边THUMB代码是不可见的。
+*/ 
 
  THUMB(	adr	r9, BSYM(1f)	)	@ Kernel is always entered in ARM.
  THUMB(	bx	r9		)	@ If this is a Thumb-2 kernel,
@@ -88,11 +97,13 @@ ENTRY(stext)
 #ifdef CONFIG_ARM_VIRT_EXT
 	bl	__hyp_stub_install
 #endif
-	@ ensure svc mode and all interrupts masked
-	safe_svcmode_maskall r9
-
-	mrc	p15, 0, r9, c0, c0		@ get processor id
-	bl	__lookup_processor_type		@ r5=procinfo r9=cpuid
+	@ ensure svc mode and all interrupts masked  //确保kernel运行在SVC模式下,并且IRQ和FIRQ中断已经关闭
+	safe_svcmode_maskall r9 
+    //从arm协处理器里面读到CPU ID存储到r9，这里的CPU主要是指arm架构相关的CPU型号，比如ARM9，ARM11等等。
+	mrc	p15, 0, r9, c0, c0		@ get processor id 
+    //通过从__lookup_processor_type_data中获取处理器信息位置，通过轮询查找该内核是否支持该本处理器。其中r9是通过processor id。 
+	bl	__lookup_processor_type		@ r5=procinfo r9=cpuid 
+    //r5保存处理器信息，若为空则出错__error_p 
 	movs	r10, r5				@ invalid processor (r5=0)?
  THUMB( it	eq )		@ force fixup-able long branch encoding
 	beq	__error_p			@ yes, error 'p'
@@ -118,13 +129,15 @@ ENTRY(stext)
 	 * r1 = machine no, r2 = atags or dtb,
 	 * r8 = phys_offset, r9 = cpuid, r10 = procinfo
 	 */
+     //检查atags parameter的有效性
 	bl	__vet_atags
 #ifdef CONFIG_SMP_ON_UP
 	bl	__fixup_smp
 #endif
 #ifdef CONFIG_ARM_PATCH_PHYS_VIRT
 	bl	__fixup_pv_table
-#endif
+#endifi
+    //创建临时页表，它所要做的工作就是将RAM基地址开始的4M空间的物理地址映射到0xC0000000开始的虚拟地址处
 	bl	__create_page_tables
 
 	/*
@@ -134,8 +147,10 @@ ENTRY(stext)
 	 * above.  On return, the CPU will be ready for the MMU to be
 	 * turned on, and r0 will hold the CPU control register value.
 	 */
+    //将__mmap_switched这个symbol的链接地址放在sp里面
 	ldr	r13, =__mmap_switched		@ address to jump to after
 						@ mmu has been enabled
+     //把标号1处地址赋给lr
 	adr	lr, BSYM(1f)			@ return (PIC) address
 	mov	r8, r4				@ set TTBR1 to swapper_pg_dir
  ARM(	add	pc, r10, #PROCINFO_INITFUNC	)
@@ -160,6 +175,7 @@ ENDPROC(stext)
  *  r0, r3, r5-r7 corrupted
  *  r4 = page table (see ARCH_PGD_SHIFT in asm/memory.h)
  */
+    //创建临时页表
 __create_page_tables:
 	pgtbl	r4, r8				@ page table address
 
